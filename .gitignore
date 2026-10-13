@@ -1,0 +1,13 @@
+venv/
+env/
+.venv/
+data/raw/
+data/processed/
+*.parquet
+*.csv
+*.json
+.env
+credentials.json
+__pycache__/
+*.pyc
+.DS_Store
