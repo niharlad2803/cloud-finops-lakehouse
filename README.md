@@ -14,6 +14,8 @@ flowchart LR
     D --> E[Star Schema Transform\nfinops_analytics]
     E --> F[3-Sigma Detection View\nv_daily_cost_anomalies]
     E --> G[Looker Studio\nExecutive Dashboard]
+    F --> H[Anomaly Alerting\nSlack Incidents]
+    B --> I[Data Quality Gate\nCI/CD Validation]
 ```
 
 ---
@@ -27,6 +29,9 @@ flowchart LR
   - `dim_tag`: JSON tag extraction detailing `environment`, `team`, `cost_center`, and compliance flags.
   - `dim_date`: Calendar date spine with day-of-week, weekend, and fiscal period attributes.
 - **Statistical FinOps Anomaly Detection:** Implements rolling 7-day baselines via SQL window functions (`AVG`, `STDDEV`) to calculate dynamic Z-scores and flag spend anomalies where excess spend exceeds 2.5 sigma and $200 burn.
+- **Automated Anomaly Alerting:** Python service that queries the local DuckDB lakehouse for cost anomalies and delivers structured Slack Block Kit incident alerts with severity classification (CRITICAL / WARNING).
+- **Data Quality Gates:** Automated 8-point validation suite (record counts, schema integrity, null detection, service coverage, cost sanity, partition integrity, date range, anomaly flag presence) designed to run as a CI/CD gate.
+- **CI/CD Pipeline:** GitHub Actions workflow for daily automated pipeline execution with data generation, partitioning, quality validation, anomaly detection, and artifact upload.
 - **Cost Allocation & Governance:** Computes tag compliance metrics and quantifies untagged resource waste across departments.
 
 ---
@@ -49,15 +54,26 @@ flowchart LR
 
 ```text
 cloud-finops-lakehouse/
+├── .github/
+│   └── workflows/
+│       └── daily_finops_pipeline.yml  # CI/CD: daily automated pipeline
 ├── data/
-│   ├── raw/                  # Raw synthetic billing data (Parquet)
-│   └── processed/lake/       # Partitioned Parquet data lake (year/month)
+│   ├── raw/                           # Raw synthetic billing data (Parquet)
+│   └── processed/lake/                # Partitioned Parquet data lake (year/month)
 ├── src/
-│   ├── ingestion/            # Pipeline scripts for profiling and partitioning
-│   └── generators/           # Synthetic multi-cloud billing log generator
+│   ├── alerts/
+│   │   └── anomaly_notifier.py        # Automated Slack anomaly alerting service
+│   ├── quality/
+│   │   └── data_validator.py          # Data quality gate checks
+│   ├── ingestion/
+│   │   ├── generate_billing_data.py   # Synthetic billing log generator
+│   │   └── partition_data.py          # DuckDB lakehouse partitioning pipeline
+│   └── transforms/
+│       └── inspect_data.py            # Parquet inspection utility
 ├── sql/
-│   ├── star_schema_models.sql       # BigQuery dimensional DDL
-│   └── anomaly_detection_view.sql   # FinOps rolling 3-sigma detection logic
+│   ├── star_schema_models.sql         # BigQuery dimensional DDL
+│   └── anomaly_detection_view.sql     # FinOps rolling 3-sigma detection logic
+├── requirements.txt
 └── README.md
 ```
 
@@ -74,13 +90,51 @@ cd cloud-finops-lakehouse
 # Setup virtual environment
 python3 -m venv venv
 source venv/bin/activate
-pip install duckdb pandas pyarrow
+pip install -r requirements.txt
+
+# Generate synthetic billing data
+python src/ingestion/generate_billing_data.py
 
 # Run partitioning pipeline
 python src/ingestion/partition_data.py
 ```
 
-### 2. Analytics Execution
+### 2. Data Quality Validation
+```bash
+# Run the 8-point quality gate
+python -m src.quality.data_validator
+```
+
+### 3. Anomaly Detection & Alerting
+```bash
+# Dry-run mode (preview anomalies, write JSON report)
+python -m src.alerts.anomaly_notifier --dry-run
+
+# Live mode (send Slack alerts)
+export SLACK_WEBHOOK_URL="https://hooks.slack.com/services/..."
+python -m src.alerts.anomaly_notifier
+```
+
+### 4. Analytics Execution
 All dimensional models and anomaly views are version-controlled under `sql/`:
 - `sql/star_schema_models.sql`: DDL for Star Schema creation.
 - `sql/anomaly_detection_view.sql`: Windowed anomaly detection logic.
+
+---
+
+## CI/CD Pipeline
+
+The GitHub Actions workflow (`.github/workflows/daily_finops_pipeline.yml`) automates the full pipeline:
+
+| Step | Description | Failure Mode |
+| :--- | :--- | :--- |
+| Generate Data | Creates 25k synthetic billing records | Blocks pipeline |
+| Partition Pipeline | DuckDB Hive-style partitioning | Blocks pipeline |
+| Data Quality Gate | 8-point validation suite | Blocks pipeline |
+| Anomaly Detection | Rolling 3-sigma detection (dry-run) | Continue on error |
+| Upload Artifacts | Anomaly report JSON (30-day retention) | Always runs |
+| Pipeline Summary | Markdown summary on workflow run page | Always runs |
+
+**Triggers:** Daily at 08:00 UTC, manual dispatch, push/PR to `main` on `src/`, `sql/`, or `requirements.txt` changes.
+
+**Slack Alerts (optional):** Add `SLACK_WEBHOOK_URL` as a repository secret to enable live Slack alerting in the pipeline.
