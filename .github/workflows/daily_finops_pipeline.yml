@@ -75,7 +75,8 @@ jobs:
       # 5. Generate synthetic billing data (parquet files are gitignored)
       # ------------------------------------------------------------------
       - name: Generate Synthetic Billing Data
-        run: python src/ingestion/generate_billing_data.py
+        run: mkdir -p data/raw data/processed/lake
+        python src/ingestion/generate_billing_data.py
 
       # ------------------------------------------------------------------
       # 6. Run DuckDB partition pipeline
