@@ -1,36 +1,9 @@
-# =============================================================================
-# Daily FinOps Pipeline
-# =============================================================================
-# Simulates daily automated execution of the full FinOps data pipeline.
-# Pipeline order: generate data → partition → validate → detect anomalies → alert
-#
-# Triggers:
-#   - Scheduled daily at 08:00 UTC
-#   - Manual dispatch via GitHub UI
-#   - Push/PR to main when source, SQL, or dependency files change
-# =============================================================================
-
 name: Daily FinOps Pipeline
 
 on:
   schedule:
-    - cron: '0 8 * * *'   # Daily at 08:00 UTC
-  workflow_dispatch:       # Manual trigger
-  push:
-    branches: [main]
-    paths:
-      - 'src/**'
-      - 'sql/**'
-      - 'requirements.txt'
-  pull_request:
-    branches: [main]
-    paths:
-      - 'src/**'
-      - 'sql/**'
-      - 'requirements.txt'
-
-env:
-  PYTHON_VERSION: '3.11'
+    - cron: '0 6 * * *'
+  workflow_dispatch:
 
 jobs:
   finops-pipeline:
@@ -38,97 +11,33 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # ------------------------------------------------------------------
-      # 1. Checkout repository
-      # ------------------------------------------------------------------
-      - name: Checkout Repository
+      - name: Checkout Code
         uses: actions/checkout@v4
 
-      # ------------------------------------------------------------------
-      # 2. Setup Python runtime
-      # ------------------------------------------------------------------
-      - name: Setup Python ${{ env.PYTHON_VERSION }}
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
+          python-version: '3.11'
+          cache: 'pip'
 
-      # ------------------------------------------------------------------
-      # 3. Cache pip dependencies for faster subsequent runs
-      # ------------------------------------------------------------------
-      - name: Cache pip Dependencies
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
-
-      # ------------------------------------------------------------------
-      # 4. Install project dependencies
-      # ------------------------------------------------------------------
       - name: Install Dependencies
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
 
-      # ------------------------------------------------------------------
-      # 5. Generate synthetic billing data (parquet files are gitignored)
-      # ------------------------------------------------------------------
       - name: Generate Synthetic Billing Data
-        run: mkdir -p data/raw data/processed/lake
-        python src/ingestion/generate_billing_data.py
-
-      # ------------------------------------------------------------------
-      # 6. Run DuckDB partition pipeline
-      # ------------------------------------------------------------------
-      - name: Run DuckDB Partition Pipeline
-        run: python src/ingestion/partition_data.py
-
-      # ------------------------------------------------------------------
-      # 7. Data quality gate — validates data integrity and completeness
-      # ------------------------------------------------------------------
-      - name: Run Data Quality Gate
-        id: quality-gate
-        run: python -m src.quality.data_validator
-
-      # ------------------------------------------------------------------
-      # 8. Anomaly detection (dry-run mode)
-      #    continue-on-error: true — finding anomalies is expected behavior,
-      #    not a pipeline failure.
-      # ------------------------------------------------------------------
-      - name: Run Anomaly Detection (Dry Run)
-        continue-on-error: true
-        run: python -m src.alerts.anomaly_notifier --dry-run
-
-      # ------------------------------------------------------------------
-      # 9. Upload pipeline artifacts for downstream consumption / review
-      # ------------------------------------------------------------------
-      - name: Upload Pipeline Artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: finops-pipeline-artifacts
-          path: |
-            data/anomaly_report.json
-          retention-days: 30
-          if-no-files-found: ignore
-
-      # ------------------------------------------------------------------
-      # 10. Generate a Markdown summary for the GitHub Actions run page
-      # ------------------------------------------------------------------
-      - name: Pipeline Summary
-        if: always()
         run: |
-          echo "## 📊 FinOps Pipeline Summary" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "**Run Date:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> "$GITHUB_STEP_SUMMARY"
-          echo "**Quality Gate:** ${{ steps.quality-gate.outcome }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
+          mkdir -p data/raw data/processed/lake
+          python src/ingestion/generate_billing_data.py
 
-          # Report anomaly count if the report file exists
-          if [ -f "data/anomaly_report.json" ]; then
-            ANOMALY_COUNT=$(python -c "import json; data=json.load(open('data/anomaly_report.json')); print(len(data))")
-            echo "**Anomalies Detected:** ${ANOMALY_COUNT}" >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "**Anomalies Detected:** _No anomaly report generated_" >> "$GITHUB_STEP_SUMMARY"
-          fi
+      - name: Run DuckDB Partition Pipeline
+        run: |
+          python src/ingestion/partition_data.py
+
+      - name: Run Data Quality Gate
+        run: |
+          python -m src.quality.data_validator
+
+      - name: Run Anomaly Detection (Dry Run)
+        run: |
+          python -m src.alerts.anomaly_notifier --dry-run
